@@ -1,39 +1,65 @@
-import { EMPTY, filter, fromEvent } from 'rxjs';
 import {
-  map, debounceTime, distinctUntilChanged, switchMap, mergeMap, tap, catchError,
-} from 'rxjs/operators';
-import { ajax } from 'rxjs/ajax';
+  fromEvent, map, pairwise, switchMap, takeUntil, withLatestFrom, startWith,
+} from 'rxjs';
 
-const url = 'https://api.github.com/search/users?q=';
+const canvas = document.querySelector('canvas');
+const range = document.getElementById('range');
+const color = document.getElementById('color');
 
-const search = document.getElementById('search');
-const result = document.getElementById('result');
+const ctx = canvas.getContext('2d');
+const rect = canvas.getBoundingClientRect();
+const scale = window.devicePixelRatio;
 
-const stream$ = fromEvent(search, 'input')
+canvas.width = rect.width * scale;
+canvas.height = rect.height * scale;
+
+ctx.scale(scale, scale);
+
+const mouseMove$ = fromEvent(canvas, 'mousemove');
+const mouseDown$ = fromEvent(canvas, 'mousedown');
+const mouseUp$ = fromEvent(canvas, 'mouseup');
+const mouseOut$ = fromEvent(canvas, 'mouseout');
+
+function createInputStream(node) {
+  return fromEvent(node, 'input')
+    .pipe(
+      map((e) => e.target.value),
+      startWith(node.value),
+    );
+}
+
+const lineWidth$ = createInputStream(range);
+
+const strokeStyle$ = createInputStream(color);
+
+const stream$ = mouseDown$
   .pipe(
-    map((e) => e.target.value),
-    debounceTime(1000),
-    distinctUntilChanged(),
-    tap(() => result.innerHTML = ''),
-    filter((v) => !!v.trim()),
-    switchMap((v) => ajax.getJSON(url + encodeURIComponent(v)).pipe(
-      catchError(() => EMPTY),
-    )),
-    map((response) => response.items),
-    mergeMap((items) => items),
+    withLatestFrom(lineWidth$, strokeStyle$, (_, lineWidth, strokeStyle) => ({
+      lineWidth,
+      strokeStyle,
+    })),
+    switchMap((options) => mouseMove$
+      .pipe(
+        map((e) => ({
+          x: e.offsetX,
+          y: e.offsetY,
+          options,
+        })),
+        pairwise(),
+        takeUntil(mouseUp$),
+        takeUntil(mouseOut$),
+      )),
   );
 
-stream$.subscribe((user) => {
-  const html = `
-        <div class="card">
-        <div class="card-image">
-          <img src="${user.avatar_url}" />
-          <span class="card-title">${user.login}</span>
-          <div class="card-action">
-            <a href="${user.html_url}" target="_blank">Открыть github</a>
-          </div>
-        </div>
-      </div>`;
+stream$
+  .subscribe(([from, to]) => {
+    const { lineWidth, strokeStyle } = from.options;
 
-  result.insertAdjacentHTML('beforeend', html);
-});
+    ctx.lineWidth = lineWidth;
+    ctx.strokeStyle = strokeStyle;
+
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+  });
