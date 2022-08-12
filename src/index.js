@@ -1,65 +1,53 @@
 import {
-  fromEvent, map, pairwise, switchMap, takeUntil, withLatestFrom, startWith,
+  scan, shareReplay, startWith, Subject,
 } from 'rxjs';
 
-const canvas = document.querySelector('canvas');
-const range = document.getElementById('range');
-const color = document.getElementById('color');
+const initialState = {
+  counter: 0,
+};
 
-const ctx = canvas.getContext('2d');
-const rect = canvas.getBoundingClientRect();
-const scale = window.devicePixelRatio;
+const pre = document.querySelector('pre');
 
-canvas.width = rect.width * scale;
-canvas.height = rect.height * scale;
+const handlers = {
+  INCREMENT: (state) => ({ ...state, counter: state.counter + 1 }),
+  DECREMENT: (state) => ({ ...state, counter: state.counter - 1 }),
+  ADD: (state, action) => ({ ...state, counter: state.counter + action.payload }),
+  DEFAULT: (state) => state,
+};
 
-ctx.scale(scale, scale);
-
-const mouseMove$ = fromEvent(canvas, 'mousemove');
-const mouseDown$ = fromEvent(canvas, 'mousedown');
-const mouseUp$ = fromEvent(canvas, 'mouseup');
-const mouseOut$ = fromEvent(canvas, 'mouseout');
-
-function createInputStream(node) {
-  return fromEvent(node, 'input')
-    .pipe(
-      map((e) => e.target.value),
-      startWith(node.value),
-    );
+function reducer(state = initialState, action) {
+  const handler = handlers[action.type] || handlers.DEFAULT;
+  return handler(state, action);
 }
 
-const lineWidth$ = createInputStream(range);
+function createStore(rootReducer) {
+  const subj$ = new Subject();
 
-const strokeStyle$ = createInputStream(color);
-
-const stream$ = mouseDown$
-  .pipe(
-    withLatestFrom(lineWidth$, strokeStyle$, (_, lineWidth, strokeStyle) => ({
-      lineWidth,
-      strokeStyle,
-    })),
-    switchMap((options) => mouseMove$
-      .pipe(
-        map((e) => ({
-          x: e.offsetX,
-          y: e.offsetY,
-          options,
-        })),
-        pairwise(),
-        takeUntil(mouseUp$),
-        takeUntil(mouseOut$),
-      )),
+  const store$ = subj$.pipe(
+    startWith({ type: '__INIT__' }),
+    scan(rootReducer, undefined),
+    shareReplay(1),
   );
 
-stream$
-  .subscribe(([from, to]) => {
-    const { lineWidth, strokeStyle } = from.options;
+  store$.dispatch = (action) => subj$.next(action);
 
-    ctx.lineWidth = lineWidth;
-    ctx.strokeStyle = strokeStyle;
+  return store$;
+}
 
-    ctx.beginPath();
-    ctx.moveTo(from.x, from.y);
-    ctx.lineTo(to.x, to.y);
-    ctx.stroke();
-  });
+const store$ = createStore(reducer);
+
+store$.subscribe((state) => {
+  pre.innerHTML = JSON.stringify(state, null, 2);
+});
+
+document.getElementById('increment').addEventListener('click', () => {
+  store$.dispatch({ type: 'INCREMENT' });
+});
+
+document.getElementById('decrement').addEventListener('click', () => {
+  store$.dispatch({ type: 'DECREMENT' });
+});
+
+document.getElementById('add').addEventListener('click', () => {
+  store$.dispatch({ type: 'ADD', payload: 10 });
+});
